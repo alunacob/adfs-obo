@@ -52,19 +52,19 @@ namespace TodoListClient
         // The Redirect URI is the URI where Azure AD will return OAuth responses.
         // The Authority is the sign-in URL of the tenant.
         //
-        private static string aadInstance = ConfigurationManager.AppSettings["ida:AADInstance"];
-        private static string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
+        //private static string aadInstance = ConfigurationManager.AppSettings["ida:AADInstance"];
+        //private static string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
         private static string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
         Uri redirectUri = new Uri(ConfigurationManager.AppSettings["ida:RedirectUri"]);
 
-        private static string authority = String.Format(CultureInfo.InvariantCulture, aadInstance, tenant);
+        private static string authority = ConfigurationManager.AppSettings["ida:Authority"];
 
         //
         // To authenticate to the To Do list service, the client needs to know the service's App ID URI.
         // To contact the To Do list service we need it's URL as well.
         //
-        private static string todoListResourceId = ConfigurationManager.AppSettings["todo:TodoListResourceId"];
-        private static string todoListBaseAddress = ConfigurationManager.AppSettings["todo:TodoListBaseAddress"];
+        private static string todoListResourceId = ConfigurationManager.AppSettings["ida:TodoListResourceId"];
+        private static string todoListBaseAddress = ConfigurationManager.AppSettings["ida:TodoListBaseAddress"];
 
         private HttpClient httpClient = new HttpClient();
         private AuthenticationContext authContext = null;
@@ -81,7 +81,8 @@ namespace TodoListClient
             //
             // As the application starts, try to get an access token without prompting the user.  If one exists, populate the To Do list.  If not, continue.
             //
-            authContext = new AuthenticationContext(authority, new FileCache());
+            authContext = new AuthenticationContext(authority, false);
+            //authContext = new AuthenticationContext(authority, new FileCache());
             AuthenticationResult result = null;
             try
             {

@@ -35,6 +35,7 @@ using Newtonsoft.Json;
 using System.Threading;
 using TodoListService.DAL;
 using System.Web.Http.Cors;
+using System.Web.Script.Serialization;
 
 namespace TodoListService.Controllers
 {
@@ -43,25 +44,36 @@ namespace TodoListService.Controllers
 
     public class TodoListController : ApiController
     {
-        //
-        // The Client ID is used by the application to uniquely identify itself to Azure AD.
-        // The App Key is a credential used by the application to authenticate to Azure AD.
-        // The Tenant is the name of the Azure AD tenant in which this application is registered.
-        // The AAD Instance is the instance of Azure, for example public Azure or Azure China.
-        // The Authority is the sign-in URL of the tenant.
-        //
-        private static string aadInstance = ConfigurationManager.AppSettings["ida:AADInstance"];
-        private static string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
-        private static string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
-        private static string appKey = ConfigurationManager.AppSettings["ida:AppKey"];
+        ////
+        //// The Client ID is used by the application to uniquely identify itself to Azure AD.
+        //// The App Key is a credential used by the application to authenticate to Azure AD.
+        //// The Tenant is the name of the Azure AD tenant in which this application is registered.
+        //// The AAD Instance is the instance of Azure, for example public Azure or Azure China.
+        //// The Authority is the sign-in URL of the tenant.
+        ////
+        //private static string aadInstance = ConfigurationManager.AppSettings["ida:AADInstance"];
+        //private static string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
+        //private static string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
+        //private static string appKey = ConfigurationManager.AppSettings["ida:AppKey"];
+
+        ////
+        //// To authenticate to the Graph API, the app needs to know the Grah API's App ID URI.
+        //// To contact the Me endpoint on the Graph API we need the URL as well.
+        ////
+        //private static string graphResourceId = ConfigurationManager.AppSettings["ida:GraphResourceId"];
+        //private static string graphUserUrl = ConfigurationManager.AppSettings["ida:GraphUserUrl"];
+        //private const string TenantIdClaimType = "http://schemas.microsoft.com/identity/claims/tenantid";
 
         //
-        // To authenticate to the Graph API, the app needs to know the Grah API's App ID URI.
-        // To contact the Me endpoint on the Graph API we need the URL as well.
-        //
-        private static string graphResourceId = ConfigurationManager.AppSettings["ida:GraphResourceId"];
-        private static string graphUserUrl = ConfigurationManager.AppSettings["ida:GraphUserUrl"];
-        private const string TenantIdClaimType = "http://schemas.microsoft.com/identity/claims/tenantid";
+        // The Client ID is used by the application to uniquely identify itself to Azure AD.
+        // The client secret is the credentials for the WebServer Client
+
+        private static string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
+        private static string clientSecret = ConfigurationManager.AppSettings["ida:ClientSecret"];
+        private static string authority = ConfigurationManager.AppSettings["ida:Authority"];
+
+        // Base address of the WebAPI
+        private static string OBOWebAPIBase = ConfigurationManager.AppSettings["ida:OBOWebAPIBase"];
 
         //
         // To Do items list for all users.  Since the list is stored in memory, it will go away if the service is cycled.
@@ -83,8 +95,8 @@ namespace TodoListService.Controllers
                 throw new HttpResponseException(new HttpResponseMessage { StatusCode = HttpStatusCode.Unauthorized, ReasonPhrase = "The Scope claim does not contain 'user_impersonation' or scope claim not found" });
             }
 
-            // A user's To Do list is keyed off of the NameIdentifier claim, which contains an immutable, unique identifier for the user.
-            Claim subject = ClaimsPrincipal.Current.FindFirst(ClaimTypes.NameIdentifier);
+            // A user's To Do list is keyed off of the Name claim, which contains an immutable, unique identifier for the user.
+            Claim subject = ClaimsPrincipal.Current.FindFirst(ClaimTypes.Name);
 
             return from todo in db.TodoItems
                    where todo.Owner == subject.Value
@@ -94,21 +106,19 @@ namespace TodoListService.Controllers
         // POST api/todolist
         public async Task Post(TodoItem todo)
         {
-            var scopeClaim = ClaimsPrincipal.Current.FindFirst("http://schemas.microsoft.com/identity/claims/scope");
-            if (scopeClaim == null || !scopeClaim.Value.Contains("user_impersonation"))
+            if (!ClaimsPrincipal.Current.FindFirst("https://schemas.microsoft.com/identity/claims/scope").Value.Contains("user_impersonation"))
             {
                 throw new HttpResponseException(new HttpResponseMessage { StatusCode = HttpStatusCode.Unauthorized, ReasonPhrase = "The Scope claim does not contain 'user_impersonation' or scope claim not found" });
             }
 
             //
-            // Call the Graph API On Behalf Of the user who called the To Do list web API.
+            // Call the WebAPIOBO On Behalf Of the user who called the To Do list web API.
             //
             string augmentedTitle = null;
-            UserProfile profile = new UserProfile();
-            profile = await CallGraphAPIOnBehalfOfUser();
-            if (profile != null)
+            string custommessage = await CallGraphAPIOnBehalfOfUser();
+            if (custommessage != null)
             {
-                augmentedTitle = String.Format("{0}, First Name: {1}, Last Name: {2}", todo.Title, profile.GivenName, profile.Surname);
+                augmentedTitle = String.Format("{0}, Message: {1}", todo.Title, custommessage);
             }
             else
             {
@@ -117,16 +127,18 @@ namespace TodoListService.Controllers
 
             if (null != todo && !string.IsNullOrWhiteSpace(todo.Title))
             {
-                db.TodoItems.Add(new TodoItem { Title = augmentedTitle, Owner = ClaimsPrincipal.Current.FindFirst(ClaimTypes.NameIdentifier).Value });
+                db.TodoItems.Add(new TodoItem { Title = augmentedTitle, Owner = ClaimsPrincipal.Current.FindFirst(ClaimTypes.Name).Value });
                 db.SaveChanges();
             }
         }
 
-        public static async Task<UserProfile> CallGraphAPIOnBehalfOfUser()
+        public static async Task<string> CallGraphAPIOnBehalfOfUser()
         {
-            UserProfile profile = null;
             string accessToken = null;
             AuthenticationResult result = null;
+            AuthenticationContext authContext = null;
+            HttpClient httpClient = new HttpClient();
+            string custommessage = "";
 
             //
             // Use ADAL to get a token On Behalf Of the current user.  To do this we will need:
@@ -135,15 +147,14 @@ namespace TodoListService.Controllers
             //      The credentials of this application.
             //      The username (UPN or email) of the user calling the API
             //
-            ClientCredential clientCred = new ClientCredential(clientId, appKey);
+            ClientCredential clientCred = new ClientCredential(clientId, clientSecret);
             var bootstrapContext = ClaimsPrincipal.Current.Identities.First().BootstrapContext as System.IdentityModel.Tokens.BootstrapContext;
             string userName = ClaimsPrincipal.Current.FindFirst(ClaimTypes.Upn) != null ? ClaimsPrincipal.Current.FindFirst(ClaimTypes.Upn).Value : ClaimsPrincipal.Current.FindFirst(ClaimTypes.Email).Value;
             string userAccessToken = bootstrapContext.Token;
             UserAssertion userAssertion = new UserAssertion(bootstrapContext.Token, "urn:ietf:params:oauth:grant-type:jwt-bearer", userName);
 
-            string authority = String.Format(CultureInfo.InvariantCulture, aadInstance, tenant);
-            string userId = ClaimsPrincipal.Current.FindFirst(ClaimTypes.NameIdentifier).Value;
-            AuthenticationContext authContext = new AuthenticationContext(authority, new DbTokenCache(userId));
+            string userId = ClaimsPrincipal.Current.FindFirst(ClaimTypes.Name).Value;
+            authContext = new AuthenticationContext(authority, false);
 
             // In the case of a transient error, retry once after 1 second, then abandon.
             // Retrying is optional.  It may be better, for your application, to return an error immediately to the user and have the user initiate the retry.
@@ -155,12 +166,12 @@ namespace TodoListService.Controllers
                 retry = false;
                 try
                 {
-                    result = await authContext.AcquireTokenAsync(graphResourceId, clientCred, userAssertion);
+                    result = authContext.AcquireTokenAsync(OBOWebAPIBase, clientCred, userAssertion).Result;
                     accessToken = result.AccessToken;
                 }
                 catch (AdalException ex)
                 {
-                    if (ex.ErrorCode == SERVICE_UNAVAILABLE)
+                    if (ex.ErrorCode == "temporarily_unavailable")
                     {
                         // Transient error, OK to retry.
                         retry = true;
@@ -168,7 +179,7 @@ namespace TodoListService.Controllers
                         Thread.Sleep(1000);
                     }
                 }
-            } while ((retry == true) && (retryCount < 2));
+            } while ((retry == true) && (retryCount < 1));
 
             if (accessToken == null)
             {
@@ -176,28 +187,25 @@ namespace TodoListService.Controllers
                 return (null);
             }
 
-            //
-            // Call the Graph API and retrieve the user's profile.
-            //
-            string requestUrl = String.Format(
-                CultureInfo.InvariantCulture,
-                graphUserUrl,
-                HttpUtility.UrlEncode(tenant));
-            HttpClient client = new HttpClient();
-            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            HttpResponseMessage response = await client.SendAsync(request);
+            // Once the token has been returned by ADAL, add it to the http authorization header, before making the call to access the To Do list service.
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", result.AccessToken);
 
-            //
-            // Return the user's profile.
-            //
+            // Call the WebAPIOBO.
+            HttpResponseMessage response = await httpClient.GetAsync(OBOWebAPIBase + "/api/WebAPIOBO");
+
+
             if (response.IsSuccessStatusCode)
             {
-                string responseString = await response.Content.ReadAsStringAsync();
-                profile = JsonConvert.DeserializeObject<UserProfile>(responseString);
-                return (profile);
+                // Read the response and databind to the GridView to display To Do items.
+                string s = await response.Content.ReadAsStringAsync();
+                JavaScriptSerializer serializer = new JavaScriptSerializer();
+                custommessage = serializer.Deserialize<string>(s);
+                return custommessage;
             }
-
+            else
+            {
+                custommessage = "Unsuccessful OBO operation : " + response.ReasonPhrase;
+            }
             // An unexpected error occurred calling the Graph API.  Return a null profile.
             return (null);
         }
