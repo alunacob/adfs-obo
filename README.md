@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ---
 services: active-directory
 platforms: dotnet
@@ -186,3 +187,7 @@ First, in Visual Studio 2013 create an empty solution to host the  projects.  Th
 9. In `app.config` create keys for `ida:AADInstance`, `ida:Tenant`, `ida:ClientId`, `ida:RedirectUri`, `todo:TodoListResourceId`, and `todo:TodoListBaseAddress` and set them accordingly.  For the public Azure cloud, the value of `ida:AADInstance` is `https://login.windows.net/{0}`.
 
 Finally, in the properties of the solution itself, set both projects as startup projects.
+=======
+# adfs-obo
+On premises ADFS On-Behalf-Of authentication example
+>>>>>>> 24143b8e7c9e3ea1fdc035b6ae04aa150e46de51
